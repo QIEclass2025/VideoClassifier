@@ -2,7 +2,7 @@ import os
 import hashlib
 import cv2
 import time
-from database import get_db_connection
+from .database import get_db_connection
 
 THUMBNAIL_DIR = "thumbnails"
 SUPPORTED_EXTENSIONS = ['.mp4', '.avi', '.mkv', '.mov']

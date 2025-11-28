@@ -9,8 +9,8 @@ from PyQt5.QtCore import Qt, QSize
 import os
 import subprocess
 
-from database import get_db_connection
-from video_manager import scan_and_add_videos
+from .database import get_db_connection
+from .video_manager import scan_and_add_videos
 
 class MainWindow(QMainWindow):
     def __init__(self):

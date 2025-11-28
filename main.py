@@ -1,7 +1,7 @@
 import sys
 from PyQt5.QtWidgets import QApplication
-from database import create_tables
-from main_window import MainWindow
+from videoclassifier.database import create_tables
+from videoclassifier.main_window import MainWindow
 
 def main():
     """

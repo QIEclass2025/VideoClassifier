@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+VideoClassifier.egg-info/PKG-INFO
+VideoClassifier.egg-info/SOURCES.txt
+VideoClassifier.egg-info/dependency_links.txt
+VideoClassifier.egg-info/requires.txt
+VideoClassifier.egg-info/top_level.txt
+videoclassifier/database.py
+videoclassifier/main_window.py
+videoclassifier/video_manager.py
