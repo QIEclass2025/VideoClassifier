@@ -1,5 +1,12 @@
 import sys
 import os
+
+# PyQt5가 설치된 경로를 찾아서 플러그인 위치를 강제로 등록
+import PyQt5
+qt_root_path = os.path.dirname(PyQt5.__file__)
+plugin_path = os.path.join(qt_root_path, 'Qt5', 'plugins')
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = plugin_path
+
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QLineEdit, 
                              QTableWidget, QTableWidgetItem, QHeaderView, 
