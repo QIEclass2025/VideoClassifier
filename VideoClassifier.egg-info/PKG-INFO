@@ -1,6 +1,0 @@
-Metadata-Version: 2.4
-Name: VideoClassifier
-Version: 0.1.0
-Summary: A smart video file manager with AI-like features.
-Requires-Dist: pyqt5
-Requires-Dist: opencv-python-headless
