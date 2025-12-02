@@ -5,12 +5,14 @@ import json
 import threading
 import cv2  # opencv-python
 from datetime import timedelta
+import sys
+import subprocess
 
 class VideoClassifierApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Video Classifier")
-        self.root.geometry("800x600")
+        self.root.geometry("1000x700")
 
         self.video_data = []
         self.json_path = "videos.json"
@@ -40,16 +42,16 @@ class VideoClassifierApp:
         tree_frame = ttk.Frame(main_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.tree = ttk.Treeview(tree_frame, columns=("Filename", "Duration", "Extension", "Tags"), show="headings")
+        self.tree = ttk.Treeview(tree_frame, columns=("Filename", "Duration", "Tags", "Path"), show="headings")
         self.tree.heading("Filename", text="Filename")
         self.tree.heading("Duration", text="Duration")
-        self.tree.heading("Extension", text="Extension")
         self.tree.heading("Tags", text="Tags")
+        self.tree.heading("Path", text="Path")
 
-        self.tree.column("Filename", width=300)
-        self.tree.column("Duration", width=100, anchor=tk.CENTER)
-        self.tree.column("Extension", width=80, anchor=tk.CENTER)
+        self.tree.column("Filename", width=250)
+        self.tree.column("Duration", width=80, anchor=tk.CENTER)
         self.tree.column("Tags", width=200)
+        self.tree.column("Path", width=400)
 
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
@@ -59,7 +61,7 @@ class VideoClassifierApp:
         hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.tree.bind("<Double-1>", self.edit_tags_popup)
+        self.tree.bind("<Double-1>", self.on_tree_double_click)
 
         # --- Status Bar ---
         self.status_var = tk.StringVar(value="Ready. Select a folder to start.")
@@ -67,6 +69,44 @@ class VideoClassifierApp:
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
         self.load_data()
+
+    def on_tree_double_click(self, event):
+        item_id = self.tree.focus()
+        if not item_id:
+            return
+
+        column_index = self.tree.identify_column(event.x)
+        column_name = self.tree.heading(column_index, "text")
+
+        if column_name == "Filename":
+            self.play_video(item_id)
+        elif column_name == "Path":
+            self.open_folder(item_id)
+        elif column_name == "Tags":
+            self.edit_tags_popup(item_id)
+
+    def play_video(self, file_path):
+        try:
+            if sys.platform == "win32":
+                os.startfile(file_path)
+            elif sys.platform == "darwin":
+                subprocess.call(["open", file_path])
+            else:
+                subprocess.call(["xdg-open", file_path])
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open file: {e}")
+
+    def open_folder(self, file_path):
+        folder_path = os.path.dirname(file_path)
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder_path)
+            elif sys.platform == "darwin":
+                subprocess.call(["open", folder_path])
+            else:
+                subprocess.call(["xdg-open", folder_path])
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open folder: {e}")
 
     def select_folder(self):
         folder_path = filedialog.askdirectory()
@@ -87,12 +127,11 @@ class VideoClassifierApp:
         for root_dir, _, files in os.walk(folder_path):
             for file in files:
                 if os.path.splitext(file)[1].lower() in video_extensions:
-                    full_path = os.path.join(root_dir, file)
+                    full_path = os.path.join(root_dir, file).replace('\\', '/')
                     try:
                         filename = os.path.splitext(file)[0]
                         extension = os.path.splitext(file)[1]
                         
-                        # Get video duration
                         cap = cv2.VideoCapture(full_path)
                         if not cap.isOpened():
                             continue
@@ -142,8 +181,8 @@ class VideoClassifierApp:
             self.tree.insert("", tk.END, values=(
                 video.get("filename", ""),
                 video.get("duration", "0:00:00"),
-                video.get("extension", ""),
-                video.get("tags", "")
+                video.get("tags", ""),
+                video.get("path", "")
             ), iid=video.get("path"))
 
     def filter_list(self):
@@ -175,28 +214,16 @@ class VideoClassifierApp:
         
         self.populate_treeview(filtered_data)
 
-    def edit_tags_popup(self, event):
-        selected_item_id = self.tree.focus()
-        if not selected_item_id:
-            return
-
-        # Find the video data corresponding to the selected item
-        video_to_edit = None
-        for video in self.video_data:
-            if video["path"] == selected_item_id:
-                video_to_edit = video
-                break
-        
+    def edit_tags_popup(self, item_id):
+        video_to_edit = next((v for v in self.video_data if v["path"] == item_id), None)
         if not video_to_edit:
             return
 
-        # Create a Toplevel window for editing
         popup = tk.Toplevel(self.root)
         popup.title(f"Edit Tags for {video_to_edit['filename']}")
         popup.geometry("400x150")
-        popup.transient(self.root) # Keep popup on top of the main window
+        popup.transient(self.root)
 
-        # Center the popup
         x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (400 // 2)
         y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (150 // 2)
         popup.geometry(f"+{x}+{y}")
@@ -212,7 +239,7 @@ class VideoClassifierApp:
             new_tags = tags_var.get()
             video_to_edit["tags"] = new_tags
             self.save_data()
-            self.populate_treeview() # Refresh the view
+            self.populate_treeview()
             popup.destroy()
 
         button_frame = ttk.Frame(popup)
@@ -223,7 +250,6 @@ class VideoClassifierApp:
         cancel_button.pack(side=tk.LEFT, padx=5)
         
         popup.wait_window()
-
 
 if __name__ == "__main__":
     root = tk.Tk()

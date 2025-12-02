@@ -15,7 +15,7 @@ A simple desktop application to index, view, and search for video files within a
 5.  **Asynchronous Processing**: The file scanning and metadata extraction will run in a background thread to keep the UI responsive, displaying a "Loading..." status.
 6.  **UI Display**:
     *   A main window to display all controls and data.
-    *   A list/table view (Treeview) showing columns: Filename, Duration, Extension, Tags.
+    *   A list/table view (Treeview) showing columns: Filename, Duration, Tags, and Path.
     *   A "Select Folder" button to initiate the scan.
     *   A status bar to show current progress or messages.
 7.  **Search and Filter**:
@@ -25,20 +25,19 @@ A simple desktop application to index, view, and search for video files within a
         *   `Filename`: Search only in filenames.
         *   `Extension`: Search only in file extensions.
         *   `Tag`: Search only in tags.
-8.  **Tagging**:
-    *   Users can add or edit tags for each video.
-    *   Double-clicking the "Tags" cell for a video will allow editing in a popup window.
-    *   Changes to tags will be saved back to the `videos.json` file when the user clicks a "Save" button in the popup.
+8.  **Interactive List**:
+    *   **Play Video**: Double-clicking the `Filename` cell for a video will open and play it using the system's default media player.
+    *   **Open Containing Folder**: Double-clicking the `Path` cell for a video will open the folder where the file is located.
+    *   **Edit Tags**: Double-clicking the `Tags` cell for a video will open a popup window to edit the tags.
 
 ## Technical Stack
 *   **Language**: Python 3
 *   **GUI**: `tkinter` (standard library)
 *   **Libraries**:
-    *   `os`, `glob`: For file system navigation.
+    *   `os`, `subprocess`, `sys`: For file system navigation and interaction.
     *   `json`: For storing metadata.
     *   `threading`: For background processing.
     *   `opencv-python`: To extract video duration.
-    *   `Pillow`: For UI icons.
 
 ---
 
@@ -59,7 +58,7 @@ A simple desktop application to index, view, and search for video files within a
 5.  **비동기 처리**: 파일 스캔 및 메타데이터 추출은 백그라운드 스레드에서 실행되어 UI 응답성을 유지하며, "로딩 중..." 상태를 표시합니다.
 6.  **UI 표시**:
     *   모든 컨트롤과 데이터를 표시하는 메인 창.
-    *   파일명, 길이, 확장자, 태그 열을 보여주는 리스트/테이블 뷰 (Treeview).
+    *   파일명, 길이, 태그, 경로 열을 보여주는 리스트/테이블 뷰 (Treeview).
     *   스캔을 시작하는 "폴더 선택" 버튼.
     *   현재 진행 상황이나 메시지를 보여주는 상태 표시줄.
 7.  **검색 및 필터링**:
@@ -69,17 +68,16 @@ A simple desktop application to index, view, and search for video files within a
         *   `파일명`: 파일명만 검색.
         *   `확장자`: 파일 확장자만 검색.
         *   `태그`: 태그만 검색.
-8.  **태그 기능**:
-    *   사용자는 각 비디오에 대한 태그를 추가하거나 편집할 수 있습니다.
-    *   비디오의 "태그" 셀을 더블 클릭하면 팝업 창에서 편집할 수 있습니다.
-    *   사용자가 팝업 창의 "저장" 버튼을 클릭하면 태그 변경 사항이 `videos.json` 파일에 다시 저장됩니다.
+8.  **리스트 상호작용**:
+    *   **비디오 재생**: 비디오의 `파일명` 셀을 더블 클릭하면 시스템의 기본 미디어 플레이어로 비디오를 열고 재생합니다.
+    *   **폴더 열기**: 비디오의 `경로` 셀을 더블 클릭하면 파일이 있는 폴더를 엽니다.
+    *   **태그 편집**: 비디오의 `태그` 셀을 더블 클릭하면 태그를 편집할 수 있는 팝업 창이 열립니다.
 
 ## 기술 스택
 *   **언어**: Python 3
 *   **GUI**: `tkinter` (표준 라이브러리)
 *   **라이브러리**:
-    *   `os`, `glob`: 파일 시스템 탐색용.
+    *   `os`, `subprocess`, `sys`: 파일 시스템 탐색 및 상호작용용.
     *   `json`: 메타데이터 저장용.
     *   `threading`: 백그라운드 처리용.
     *   `opencv-python`: 비디오 길이 추출용.
-    *   `Pillow`: UI 아이콘용.
