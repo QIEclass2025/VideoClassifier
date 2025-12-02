@@ -1,4 +1,6 @@
-# 비디오 분류기 (Video Classifier)
+# 영상 분류기 (Video Classifier)
+
+### 이태훈, 여인영, 김재민
 
 ## 프로젝트 개요
 
