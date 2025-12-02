@@ -36,7 +36,6 @@ pip install -r requirements.txt
 
 필요한 라이브러리는 다음과 같습니다:
 - `opencv-python`: 비디오 길이를 추출하는 데 사용됩니다.
-- `Pillow`: UI에 아이콘 등을 표시하기 위해 사용됩니다.
 
 ### 3. 프로그램 실행
 

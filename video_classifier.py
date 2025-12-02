@@ -5,7 +5,6 @@ import json
 import threading
 import cv2  # opencv-python
 from datetime import timedelta
-from PIL import Image, ImageTk
 
 class VideoClassifierApp:
     def __init__(self, root):
