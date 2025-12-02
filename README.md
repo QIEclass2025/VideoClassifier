@@ -26,23 +26,12 @@
 
 - Python 3.x 버전이 설치되어 있어야 합니다.
 
-### 2. 라이브러리 설치
-
-프로젝트 폴더에 포함된 `requirements.txt` 파일을 사용하여 필요한 라이브러리를 설치합니다. 아래 명령어를 터미널 또는 명령 프롬프트에서 실행하세요.
-
-```bash
-pip install -r requirements.txt
-```
-
-필요한 라이브러리는 다음과 같습니다:
-- `opencv-python`: 비디오 길이를 추출하는 데 사용됩니다.
-
 ### 3. 프로그램 실행
 
-라이브러리 설치가 완료되면, 다음 명령어를 사용하여 프로그램을 실행합니다.
+다음 명령어를 사용하여 프로그램을 실행합니다.
 
 ```bash
-python video_classifier.py
+uv run video_classifier.py
 ```
 
 ## 사용 방법
