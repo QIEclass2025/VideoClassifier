@@ -236,6 +236,16 @@ class VideoManagerApp(QMainWindow):
         self.file_list = QTableWidget()
         self.file_list.setColumnCount(5)
         self.file_list.setHorizontalHeaderLabels(["썸네일", "파일명", "길이", "태그", "경로"])
+        
+        header = self.file_list.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        self.file_list.setColumnWidth(1, 200)
+        self.file_list.setColumnWidth(3, 150)
+
         self.file_list.verticalHeader().setDefaultSectionSize(70)
         self.file_list.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.file_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -261,7 +271,15 @@ class VideoManagerApp(QMainWindow):
 
     def rename_video_file(self, video):
         current_filename_no_ext = video["filename"]
-        new_filename_no_ext, ok = QInputDialog.getText(self, "이름 수정", "새 파일명을 입력하세요 (확장자 제외):", text=current_filename_no_ext)
+        
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("이름 수정")
+        dialog.setLabelText("새 파일명을 입력하세요 (확장자 제외):")
+        dialog.setTextValue(current_filename_no_ext)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        
+        ok = dialog.exec_()
+        new_filename_no_ext = dialog.textValue()
         
         if ok and new_filename_no_ext and new_filename_no_ext != current_filename_no_ext:
             old_path = video["path"]
@@ -294,7 +312,16 @@ class VideoManagerApp(QMainWindow):
 
     def edit_tags_for_video(self, video):
         current_tags = video.get("tags", "")
-        new_tags, ok = QInputDialog.getText(self, "태그 수정", "태그를 입력하세요 (쉼표로 구분):", text=current_tags)
+        
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("태그 수정")
+        dialog.setLabelText("태그를 입력하세요 (쉼표로 구분):")
+        dialog.setTextValue(current_tags)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        ok = dialog.exec_()
+        new_tags = dialog.textValue()
+
         if ok:
             video["tags"] = new_tags
             self.save_data()
@@ -304,6 +331,8 @@ class VideoManagerApp(QMainWindow):
     def show_path_for_copy(self, path):
         dialog = QDialog(self)
         dialog.setWindowTitle("전체 경로 복사")
+        dialog.setMinimumWidth(600)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         layout = QVBoxLayout()
         path_edit = QLineEdit(path)
         path_edit.selectAll()
@@ -332,7 +361,6 @@ class VideoManagerApp(QMainWindow):
         self.scan_worker.finished.connect(self.on_scan_finished)
         self.scan_worker.finished.connect(self.scan_thread.quit)
         self.scan_worker.finished.connect(self.scan_worker.deleteLater)
-        self.scan_thread.finished.connect(self.scan_thread.deleteLater)
         self.scan_worker.progress.connect(lambda s: self.status_bar.showMessage(s))
 
         self.scan_thread.start()
@@ -377,6 +405,15 @@ class VideoManagerApp(QMainWindow):
         videos_to_display = data if data is not None else self.video_data
         self.file_list.setRowCount(len(videos_to_display))
         for i, video in enumerate(videos_to_display):
+            thumb_path = video.get("thumbnail_path")
+            if thumb_path and os.path.exists(thumb_path):
+                pixmap = QPixmap(thumb_path)
+                if not pixmap.isNull():
+                    thumb_label = QLabel()
+                    thumb_label.setPixmap(pixmap.scaled(96, 54, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    thumb_label.setAlignment(Qt.AlignCenter)
+                    self.file_list.setCellWidget(i, 0, thumb_label)
+            
             self.file_list.setItem(i, 1, QTableWidgetItem(video.get("filename", "")))
             self.file_list.setItem(i, 2, QTableWidgetItem(video.get("duration", "0:00:00")))
             self.file_list.setItem(i, 3, QTableWidgetItem(video.get("tags", "")))
@@ -391,7 +428,6 @@ class VideoManagerApp(QMainWindow):
         self.batch_thumb_worker.thumbnail_ready.connect(self.on_batch_thumbnail_ready)
         self.batch_thumb_worker.finished.connect(self.batch_thumb_thread.quit)
         self.batch_thumb_worker.finished.connect(self.batch_thumb_worker.deleteLater)
-        self.batch_thumb_thread.finished.connect(self.batch_thumb_thread.deleteLater)
         self.batch_thumb_thread.start()
 
     def on_batch_thumbnail_ready(self, row_index, thumb_path):
@@ -475,19 +511,53 @@ class VideoManagerApp(QMainWindow):
 
     
     def filter_list(self):
-        # Search and filter logic here
-        pass
+        search_term = self.search_input.text().lower()
+        filter_by = self.filter_combo.currentText()
+
+        if not search_term:
+            self.populate_file_list(self.video_data)
+            return
+
+        filtered_videos = []
+        for video in self.video_data:
+            filename = video.get("filename", "").lower()
+            tags = video.get("tags", "").lower()
+            
+            match = False
+            if filter_by == "All":
+                if search_term in filename or search_term in tags:
+                    match = True
+            elif filter_by == "Filename":
+                if search_term in filename:
+                    match = True
+            elif filter_by == "Tag":
+                if search_term in tags:
+                    match = True
+            
+            if match:
+                filtered_videos.append(video)
+
+        self.populate_file_list(filtered_videos)
 
     def _stop_all_threads(self, stop_scan=True, stop_batch=True):
-        if stop_scan and self.scan_worker: self.scan_worker.stop()
-        if stop_batch and self.batch_thumb_worker: self.batch_thumb_worker.stop()
+        if stop_scan and self.scan_worker:
+            self.scan_worker.stop()
+        if stop_batch and self.batch_thumb_worker:
+            self.batch_thumb_worker.stop()
         
-        if stop_scan and self.scan_thread and self.scan_thread.isRunning():
+        if stop_scan and self.scan_thread is not None:
             self.scan_thread.quit()
             self.scan_thread.wait()
-        if stop_batch and self.batch_thumb_thread and self.batch_thumb_thread.isRunning():
+            self.scan_thread.deleteLater()
+            self.scan_thread = None
+            self.scan_worker = None
+
+        if stop_batch and self.batch_thumb_thread is not None:
             self.batch_thumb_thread.quit()
             self.batch_thumb_thread.wait()
+            self.batch_thumb_thread.deleteLater()
+            self.batch_thumb_thread = None
+            self.batch_thumb_worker = None
 
     def closeEvent(self, event):
         self._stop_all_threads()
