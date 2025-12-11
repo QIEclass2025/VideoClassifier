@@ -8,6 +8,40 @@ import hashlib
 # PyQt5 and Pillow
 try:
     import PyQt5
+
+    # Try to locate Qt platform plugins and set QT_QPA_PLATFORM_PLUGIN_PATH
+    def _ensure_qt_platform_plugin_path():
+        try:
+            qt_root = os.path.dirname(PyQt5.__file__)
+        except Exception:
+            return
+
+        candidates = [
+            os.path.join(qt_root, 'Qt', 'plugins'),
+            os.path.join(qt_root, 'Qt5', 'plugins'),
+            os.path.join(qt_root, 'plugins'),
+            os.path.join(qt_root, 'Qt', 'lib', 'plugins'),
+        ]
+
+        for c in candidates:
+            platforms_dir = os.path.join(c, 'platforms')
+            if os.path.isdir(platforms_dir):
+                os.environ.setdefault('QT_QPA_PLATFORM_PLUGIN_PATH', platforms_dir)
+                return
+
+            # some installations have plugin files directly under c
+            if os.path.isdir(c):
+                try:
+                    names = os.listdir(c)
+                except Exception:
+                    names = []
+                for name in names:
+                    if name.startswith('qwindows') or name.startswith('libqwindows'):
+                        os.environ.setdefault('QT_QPA_PLATFORM_PLUGIN_PATH', c)
+                        return
+
+    _ensure_qt_platform_plugin_path()
+
     from PyQt5.QtGui import QFont, QIcon, QPixmap
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -368,7 +402,22 @@ class VideoManagerApp(QMainWindow):
     def on_scan_finished(self, found_videos):
         self.video_data = found_videos
         # Preserve tags from old data
-        self.load_data()
+        if os.path.exists(self.json_path):
+            try:
+                with open(self.json_path, 'r', encoding='utf-8') as f:
+                    old_data = json.load(f)
+                # Merge tags from old data
+                old_dict = {v.get('path'): v.get('tags', '') for v in old_data}
+                for video in self.video_data:
+                    if video['path'] in old_dict:
+                        video['tags'] = old_dict[video['path']]
+            except Exception as e:
+                print(f"Error loading old tags: {e}")
+        
+        # Save the new video data
+        self.save_data()
+        self.populate_file_list()
+        self.start_batch_thumbnail_generation()
         self.status_bar.showMessage(f"스캔 완료. {len(self.video_data)}개의 영상을 찾았습니다.")
         self.select_folder_btn.setEnabled(True)
         self.scan_thread = None
@@ -379,6 +428,11 @@ class VideoManagerApp(QMainWindow):
                 with open(self.json_path, 'r', encoding='utf-8') as f:
                     self.video_data = json.load(f)
                 
+                if not isinstance(self.video_data, list):
+                    self.video_data = []
+                    raise TypeError("JSON is not a list")
+                
+                # Ensure all videos have thumbnail_path
                 data_updated = False
                 for video in self.video_data:
                     if "thumbnail_path" not in video or not video.get("thumbnail_path"):
@@ -387,18 +441,29 @@ class VideoManagerApp(QMainWindow):
                             thumb_hash = hashlib.md5(video_path.encode()).hexdigest() + ".jpg"
                             video["thumbnail_path"] = os.path.join(self.thumbnail_dir, thumb_hash).replace('\\', '/')
                             data_updated = True
-                if data_updated: self.save_data()
+                if data_updated:
+                    self.save_data()
 
                 self.populate_file_list()
                 self.start_batch_thumbnail_generation()
                 self.status_bar.showMessage(f"{len(self.video_data)}개의 영상 정보를 불러왔습니다.")
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                print(f"Error loading {self.json_path}: {e}")
                 self.status_bar.showMessage(f"오류: {self.json_path} 파일을 읽을 수 없습니다.")
                 self.video_data = []
+        else:
+            # JSON 파일이 없으면 빈 상태로 시작
+            self.video_data = []
+            self.status_bar.showMessage("준비 완료. 폴더를 선택하여 영상을 스캔하세요.")
 
     def save_data(self):
-        with open(self.json_path, 'w', encoding='utf-8') as f:
-            json.dump(self.video_data, f, indent=4, ensure_ascii=False)
+        try:
+            with open(self.json_path, 'w', encoding='utf-8') as f:
+                json.dump(self.video_data, f, indent=4, ensure_ascii=False)
+            print(f"Data saved to {self.json_path}")
+        except Exception as e:
+            print(f"Error saving data to {self.json_path}: {e}")
+            self.status_bar.showMessage(f"오류: 데이터를 저장할 수 없습니다. {e}")
 
     def populate_file_list(self, data=None):
         self.file_list.setRowCount(0)
@@ -420,15 +485,19 @@ class VideoManagerApp(QMainWindow):
             self.file_list.setItem(i, 4, QTableWidgetItem(video.get("path", "")))
 
     def start_batch_thumbnail_generation(self):
-        self._stop_all_threads(stop_scan=False)
-        self.batch_thumb_thread = QThread()
-        self.batch_thumb_worker = BatchThumbnailGenerator(self.video_data)
-        self.batch_thumb_worker.moveToThread(self.batch_thumb_thread)
-        self.batch_thumb_thread.started.connect(self.batch_thumb_worker.run)
-        self.batch_thumb_worker.thumbnail_ready.connect(self.on_batch_thumbnail_ready)
-        self.batch_thumb_worker.finished.connect(self.batch_thumb_thread.quit)
-        self.batch_thumb_worker.finished.connect(self.batch_thumb_worker.deleteLater)
-        self.batch_thumb_thread.start()
+        # Stop only batch and thumbnail threads, keep scan thread
+        self._stop_all_threads(stop_scan=False, stop_batch=True, stop_thumbnail=False)
+        
+        # Ensure previous threads are fully cleaned up
+        if self.batch_thumb_thread is None:
+            self.batch_thumb_thread = QThread()
+            self.batch_thumb_worker = BatchThumbnailGenerator(self.video_data)
+            self.batch_thumb_worker.moveToThread(self.batch_thumb_thread)
+            self.batch_thumb_thread.started.connect(self.batch_thumb_worker.run)
+            self.batch_thumb_worker.thumbnail_ready.connect(self.on_batch_thumbnail_ready)
+            self.batch_thumb_worker.finished.connect(self.batch_thumb_thread.quit)
+            self.batch_thumb_worker.finished.connect(self.batch_thumb_worker.deleteLater)
+            self.batch_thumb_thread.start()
 
     def on_batch_thumbnail_ready(self, row_index, thumb_path):
         if os.path.exists(thumb_path):
@@ -539,28 +608,47 @@ class VideoManagerApp(QMainWindow):
 
         self.populate_file_list(filtered_videos)
 
-    def _stop_all_threads(self, stop_scan=True, stop_batch=True):
+    def _stop_all_threads(self, stop_scan=True, stop_batch=True, stop_thumbnail=True):
+        """Safely stop and cleanup all threads."""
+        # Stop thumbnail generation thread first
+        if stop_thumbnail and self.thumbnail_gen_worker:
+            self.thumbnail_gen_worker.stop() if hasattr(self.thumbnail_gen_worker, 'stop') else None
+        if stop_thumbnail and self.thumbnail_gen_thread is not None:
+            self.thumbnail_gen_thread.quit()
+            if not self.thumbnail_gen_thread.wait(1000):  # Wait up to 1 second
+                self.thumbnail_gen_thread.terminate()
+                self.thumbnail_gen_thread.wait()
+            self.thumbnail_gen_thread = None
+            self.thumbnail_gen_worker = None
+        
+        # Stop scan thread
         if stop_scan and self.scan_worker:
             self.scan_worker.stop()
-        if stop_batch and self.batch_thumb_worker:
-            self.batch_thumb_worker.stop()
-        
         if stop_scan and self.scan_thread is not None:
             self.scan_thread.quit()
-            self.scan_thread.wait()
-            self.scan_thread.deleteLater()
+            if not self.scan_thread.wait(2000):  # Wait up to 2 seconds
+                self.scan_thread.terminate()
+                self.scan_thread.wait()
             self.scan_thread = None
             self.scan_worker = None
 
+        # Stop batch thumbnail thread
+        if stop_batch and self.batch_thumb_worker:
+            self.batch_thumb_worker.stop()
         if stop_batch and self.batch_thumb_thread is not None:
             self.batch_thumb_thread.quit()
-            self.batch_thumb_thread.wait()
-            self.batch_thumb_thread.deleteLater()
+            if not self.batch_thumb_thread.wait(2000):  # Wait up to 2 seconds
+                self.batch_thumb_thread.terminate()
+                self.batch_thumb_thread.wait()
             self.batch_thumb_thread = None
             self.batch_thumb_worker = None
 
     def closeEvent(self, event):
-        self._stop_all_threads()
+        """Handle application close event by stopping all threads safely."""
+        try:
+            self._stop_all_threads(stop_scan=True, stop_batch=True, stop_thumbnail=True)
+        except Exception as e:
+            print(f"Error during thread cleanup: {e}")
         event.accept()
 
 if __name__ == '__main__':
