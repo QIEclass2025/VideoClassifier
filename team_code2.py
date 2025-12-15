@@ -13,15 +13,16 @@ os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = plugin_path
 
 # PyQt5 and Pillow
 try:
-    from PyQt5.QtGui import QFont, QIcon, QPixmap, QImage
+    from PyQt5.QtGui import QFont, QIcon, QPixmap, QImage, QColor, QPalette
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout,
         QHBoxLayout, QPushButton, QLabel, QLineEdit,
         QTableWidget, QTableWidgetItem, QHeaderView,
         QAbstractItemView, QMenu, QInputDialog, QMessageBox,
-        QComboBox, QFileDialog, QDialog, QSlider, QStyle, QStackedLayout,
+        QComboBox, QFileDialog, QDialog, QSlider, QStyle, QStackedLayout, QScrollArea, QFrame,
+        QTimeEdit, QDialogButtonBox, QStackedWidget,
     )
-    from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QObject, QThread, QTimer, QPoint, QSize
+    from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QObject, QThread, QTimer, QPoint, QSize, QTime
     from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
     from PyQt5.QtMultimediaWidgets import QVideoWidget
 
@@ -61,6 +62,31 @@ def _create_thumbnail_file(video_path, thumb_path, size=(480, 270)):
         print(f"Error generating thumbnail for {video_path}: {e}")
     return False
 
+def _create_thumbnail_for_timestamp(video_path, thumb_path, time_seconds, size=(160, 90)):
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"Error: Could not open video {video_path}")
+            return False
+        
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps == 0:
+            return False # Cannot seek without fps
+            
+        frame_pos = int(time_seconds * fps)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
+        ret, frame = cap.read()
+        cap.release()
+
+        if ret:
+            img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            img.thumbnail(size, Image.LANCZOS)
+            img.save(thumb_path, "JPEG", quality=80)
+            return True
+    except Exception as e:
+        print(f"Error generating timestamp thumbnail for {video_path} at {time_seconds}s: {e}")
+    return False
+
 # --- Video Player Widget with Overlay Controls ---
 class VideoContainer(QWidget):
     def __init__(self, media_player, parent=None):
@@ -71,11 +97,10 @@ class VideoContainer(QWidget):
         self.setMouseTracking(True)
 
         # 1. Main Display Area (Video or Thumbnail)
-        self.display_stack = QStackedLayout(self)
-        self.display_stack.setStackingMode(QStackedLayout.StackAll)
+        self.display_stack = QStackedWidget(self)
         
-        self.video_widget = QVideoWidget(self)
-        self.thumbnail_label = QLabel(self)
+        self.video_widget = QVideoWidget()
+        self.thumbnail_label = QLabel()
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0;")
         
@@ -95,16 +120,23 @@ class VideoContainer(QWidget):
         self.big_play_btn.hide()
 
         self.controls_widget = QWidget(self)
-        self.controls_widget.setStyleSheet("background-color: rgba(0,0,0,90); border-radius: 10px;")
+        self.controls_widget.setStyleSheet("background-color: rgba(0,0,0,128); border-radius: 10px;")
         self.controls_widget.setMouseTracking(True)
         controls_layout = QHBoxLayout(self.controls_widget)
         controls_layout.setContentsMargins(5, 5, 5, 5)
 
         self.play_pause_btn = QPushButton()
         self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.play_pause_btn.setStyleSheet("background-color: white; border: 1px solid white; border-radius: 5px;")
         
+        self.current_time_label = QLabel("00:00")
+        self.current_time_label.setStyleSheet("color: white;")
+
         self.seek_slider = QSlider(Qt.Horizontal)
         self.seek_slider.setRange(0, 0)
+
+        self.total_time_label = QLabel("00:00")
+        self.total_time_label.setStyleSheet("color: white;")
         
         self.volume_label = QLabel()
         self.volume_label.setPixmap(self.style().standardIcon(QStyle.SP_MediaVolume).pixmap(16,16))
@@ -113,7 +145,9 @@ class VideoContainer(QWidget):
         self.volume_slider.setRange(0, 100); self.volume_slider.setValue(80); self.volume_slider.setFixedWidth(100)
 
         controls_layout.addWidget(self.play_pause_btn)
+        controls_layout.addWidget(self.current_time_label)
         controls_layout.addWidget(self.seek_slider)
+        controls_layout.addWidget(self.total_time_label)
         controls_layout.addWidget(self.volume_label)
         controls_layout.addWidget(self.volume_slider)
         self.controls_widget.hide()
@@ -142,12 +176,16 @@ class VideoContainer(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        # Manually manage geometry of all children
+        self.display_stack.setGeometry(self.rect())
         self.big_play_btn.move(self.rect().center() - self.big_play_btn.rect().center())
         self.controls_widget.setGeometry(10, self.height() - 50, self.width() - 20, 40)
 
     def enterEvent(self, event):
-        if self.media_player.state() == QMediaPlayer.PlayingState:
+        # Show controls if a video is loaded (i.e., playing, paused, or stopped with thumbnail showing)
+        if self.media_player.state() in [QMediaPlayer.PlayingState, QMediaPlayer.PausedState] or self.big_play_btn.isVisible():
             self.controls_widget.show()
+            self.controls_widget.raise_()
             self.hide_timer.start()
         super().enterEvent(event)
 
@@ -157,8 +195,9 @@ class VideoContainer(QWidget):
         super().leaveEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self.media_player.state() == QMediaPlayer.PlayingState:
+        if self.media_player.state() in [QMediaPlayer.PlayingState, QMediaPlayer.PausedState] or self.big_play_btn.isVisible():
             self.controls_widget.show()
+            self.controls_widget.raise_()
             self.hide_timer.start()
         super().mouseMoveEvent(event)
 
@@ -243,8 +282,108 @@ class BatchThumbnailGenerator(QObject):
     def stop(self):
         self.is_running = False
 
+# --- Add Timeline Dialog ---
+class AddTimelineDialog(QDialog):
+    def __init__(self, max_duration_secs=86399, parent=None): # 86399 seconds = 23:59:59
+        super().__init__(parent)
+        self.setWindowTitle("타임라인 추가")
+
+        layout = QVBoxLayout(self)
+
+        # Time input
+        self.time_edit = QTimeEdit(self)
+        self.time_edit.setDisplayFormat("HH:mm:ss")
+        max_time = QTime.fromMSecsSinceStartOfDay(max_duration_secs * 1000)
+        self.time_edit.setMaximumTime(max_time)
+        layout.addWidget(QLabel("시간 (HH:mm:ss):"))
+        layout.addWidget(self.time_edit)
+
+        # Description input
+        self.description_edit = QLineEdit(self)
+        layout.addWidget(QLabel("설명:"))
+        layout.addWidget(self.description_edit)
+
+        # OK and Cancel buttons
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+    def get_data(self):
+        time_qtime = self.time_edit.time()
+        time_in_seconds = time_qtime.hour() * 3600 + time_qtime.minute() * 60 + time_qtime.second()
+        return {
+            "time": time_in_seconds,
+            "description": self.description_edit.text()
+        }
+
+# --- Timeline Entry Widget ---
+class TimelineEntryWidget(QWidget):
+    clicked = pyqtSignal(int)
+
+    def __init__(self, timeline_data, parent=None):
+        super().__init__(parent)
+        self.timeline_data = timeline_data
+        
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAutoFillBackground(True) # Important for background color
+        self.set_highlight(False) # Set default background
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(10)
+
+        # Thumbnail
+        self.thumb_label = QLabel()
+        self.thumb_label.setFixedSize(96, 54)
+        self.thumb_label.setStyleSheet("border: 1px solid #ccc; background-color: black;")
+        self.thumb_label.setAlignment(Qt.AlignCenter)
+        pixmap = QPixmap(timeline_data.get("thumb_path"))
+        if not pixmap.isNull():
+            self.thumb_label.setPixmap(pixmap.scaled(self.thumb_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            self.thumb_label.setText("썸네일 없음")
+        layout.addWidget(self.thumb_label)
+        
+        # Info (Time + Desc)
+        time_str = str(timedelta(seconds=timeline_data.get("time", 0)))
+        desc_str = timeline_data.get("text", "")
+        info_text = f"<b>{time_str}</b><br>{desc_str}"
+        
+        self.info_label = QLabel(info_text)
+        self.info_label.setWordWrap(True)
+        self.info_label.setAlignment(Qt.AlignVCenter)
+        layout.addWidget(self.info_label, 1) # Give it stretch factor
+
+    def mousePressEvent(self, event):
+        self.clicked.emit(self.timeline_data.get("time", 0))
+        super().mousePressEvent(event)
+
+    def set_highlight(self, highlighted):
+        p = self.palette()
+        if highlighted:
+            # A light blue color
+            p.setColor(self.backgroundRole(), QColor(224, 236, 255)) 
+        else:
+            # Default window color
+            p.setColor(self.backgroundRole(), QApplication.style().standardPalette().color(QPalette.Window))
+        self.setPalette(p)
+
+
 # --- Main Application Window ---
 class VideoManagerApp(QMainWindow):
+    @staticmethod
+    def ms_to_time_string(ms):
+        """Converts milliseconds to HH:MM:SS or MM:SS string."""
+        seconds = int(ms / 1000)
+        minutes = int(seconds / 60)
+        hours = int(minutes / 60)
+        
+        if hours > 0:
+            return f"{hours:02d}:{minutes % 60:02d}:{seconds % 60:02d}"
+        else:
+            return f"{minutes:02d}:{seconds % 60:02d}"
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle('똑똑한 영상 관리자 (Smart Video Manager)')
@@ -257,6 +396,8 @@ class VideoManagerApp(QMainWindow):
         self.scan_thread, self.scan_worker = None, None
         self.thumbnail_gen_thread, self.thumbnail_gen_worker = None, None
         self.batch_thumb_thread, self.batch_thumb_worker = None, None
+        
+        self.timeline_widgets = []
         
         self.media_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
         
@@ -293,6 +434,34 @@ class VideoManagerApp(QMainWindow):
         info_layout.addSpacing(20)
         info_layout.addWidget(QLabel("태그:"))
         info_layout.addWidget(self.selected_tags_label)
+
+        # --- 타임라인 섹션 ---
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        info_layout.addSpacing(10)
+        info_layout.addWidget(line)
+        info_layout.addSpacing(10)
+
+        info_layout.addWidget(QLabel("타임라인:"))
+        
+        timeline_scroll = QScrollArea()
+        timeline_scroll.setWidgetResizable(True)
+        timeline_scroll_content = QWidget()
+        self.timeline_list_layout = QVBoxLayout(timeline_scroll_content)
+        self.timeline_list_layout.setAlignment(Qt.AlignTop)
+        
+        self.no_timeline_label = QLabel("생성된 타임라인 없음")
+        self.no_timeline_label.setAlignment(Qt.AlignCenter)
+        self.timeline_list_layout.addWidget(self.no_timeline_label)
+
+        timeline_scroll.setWidget(timeline_scroll_content)
+        info_layout.addWidget(timeline_scroll)
+
+        self.add_timeline_btn = QPushButton("타임라인 추가하기")
+        info_layout.addWidget(self.add_timeline_btn)
+        # --- 타임라인 섹션 끝 ---
+
         info_layout.addStretch(1)
         info_layout.addWidget(self.play_button_main)
         
@@ -324,6 +493,7 @@ class VideoManagerApp(QMainWindow):
         
         self.media_player.stateChanged.connect(self.media_state_changed)
         self.media_player.positionChanged.connect(self.position_changed)
+        self.media_player.positionChanged.connect(self.update_timeline_highlight)
         self.media_player.durationChanged.connect(self.duration_changed)
         
         controls = self.video_container
@@ -331,6 +501,8 @@ class VideoManagerApp(QMainWindow):
         controls.big_play_btn.clicked.connect(self.play_video)
         controls.seek_slider.sliderMoved.connect(self.set_position)
         controls.volume_slider.valueChanged.connect(self.media_player.setVolume)
+
+        self.add_timeline_btn.clicked.connect(self.open_add_timeline_dialog)
 
     def select_folder(self):
         folder_path = QFileDialog.getExistingDirectory(self, "비디오 폴더를 선택하세요", self.current_selected_path or os.path.expanduser("~"))
@@ -355,22 +527,177 @@ class VideoManagerApp(QMainWindow):
     def on_scan_finished(self, found_videos):
         self.status_bar.showMessage(f"{len(found_videos)}개의 비디오를 찾았습니다. 데이터베이스 업데이트 중...")
         
-        # O(N) lookup for existing paths
-        existing_paths = {v['path'] for v in self.video_data}
+        # Create a dictionary of existing videos by path for quick lookup
+        existing_videos_map = {v['path']: v for v in self.video_data}
+        new_videos_added_to_db = 0
         
-        new_videos_added = 0
-        for video in found_videos:
-            if video['path'] not in existing_paths:
-                self.video_data.append(video)
-                new_videos_added += 1
+        # Merge found videos with the master data list (self.video_data)
+        for i, found_video in enumerate(found_videos):
+            path = found_video['path']
+            if path in existing_videos_map:
+                # If video exists, update the instance in found_videos with stored data (tags, timelines)
+                # to ensure the UI displays the saved information.
+                existing_video = existing_videos_map[path]
+                found_videos[i]['tags'] = existing_video.get('tags', '')
+                found_videos[i]['timelines'] = existing_video.get('timelines', [])
+            else:
+                # If video is new, add it to the master list
+                self.video_data.append(found_video)
+                new_videos_added_to_db += 1
 
-        self.populate_file_list()
-        self.save_data()
-        self.status_bar.showMessage(f"스캔 완료. {new_videos_added}개의 새로운 비디오 추가.", 5000)
+        # Now, populate the list with ONLY the videos found in the scanned folder
+        self.populate_file_list(found_videos)
+        
+        # Save the potentially updated master data list
+        if new_videos_added_to_db > 0:
+            self.save_data()
+            
+        self.status_bar.showMessage(f"스캔 완료. {len(found_videos)}개의 영상 표시. {new_videos_added_to_db}개 신규 추가.", 5000)
         self._stop_all_threads(stop_batch=False) # Keep batch thumbnail generator running if it was
+
+    def open_add_timeline_dialog(self):
+        if not self.current_selected_path:
+            QMessageBox.warning(self, "경고", "먼저 영상을 선택해주세요.")
+            return
+
+        video = next((v for v in self.video_data if v["path"] == self.current_selected_path), None)
+        if not video:
+            return # Should not happen if a path is selected
+
+        duration_str = video.get("duration", "0:00:00")
+        try:
+            parts = list(map(int, duration_str.split(':')))
+            if len(parts) == 3:
+                h, m, s = parts
+                duration_secs = h * 3600 + m * 60 + s
+            else:
+                duration_secs = 0
+        except (ValueError, TypeError):
+            duration_secs = 0
+
+        dialog = AddTimelineDialog(max_duration_secs=duration_secs, parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            data = dialog.get_data()
+            if not data["description"].strip():
+                QMessageBox.warning(self, "경고", "설명을 입력해야 합니다.")
+                return
+
+            # Create a unique path for the timeline thumbnail
+            thumb_hash = hashlib.md5(f"{video['path']}_{data['time']}".encode()).hexdigest()
+            timeline_thumb_path = os.path.join(self.thumbnail_dir, f"timeline_{thumb_hash}.jpg").replace('\\', '/')
+
+            # Generate the thumbnail
+            _create_thumbnail_for_timestamp(video['path'], timeline_thumb_path, data['time'])
+
+            # Add to video_data
+            if "timelines" not in video:
+                video["timelines"] = []
+            
+            video["timelines"].append({
+                "time": data["time"],
+                "text": data["description"].strip(),
+                "thumb_path": timeline_thumb_path
+            })
+            # Sort timelines by time
+            video["timelines"].sort(key=lambda t: t["time"])
+
+            # Save data
+            self.save_data()
+            
+            # Refresh UI
+            self.update_info_panel()
+
+            # TODO: Generate thumbnail for the new timeline entry
+
+    def rename_video_file(self, video):
+        current_filename_no_ext = video["filename"]
+        
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("이름 수정")
+        dialog.setLabelText("새 파일명을 입력하세요 (확장자 제외):")
+        dialog.setTextValue(current_filename_no_ext)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint) # Remove help button
+        
+        ok = dialog.exec_()
+        new_filename_no_ext = dialog.textValue()
+        
+        if ok and new_filename_no_ext and new_filename_no_ext != current_filename_no_ext:
+            old_path = video["path"]
+            file_dir = os.path.dirname(old_path)
+            ext = video["extension"]
+            new_filename_with_ext = new_filename_no_ext + ext
+            new_path = os.path.join(file_dir, new_filename_with_ext).replace('\\', '/')
+
+            if os.path.exists(new_path):
+                QMessageBox.warning(self, "오류", "같은 이름의 파일이 이미 존재합니다.")
+                return
+
+            try:
+                os.rename(old_path, new_path)
+                
+                # Update thumbnail path and rename thumbnail file if it exists
+                old_thumb_path = video["thumbnail_path"]
+                new_thumb_hash = hashlib.md5(new_path.encode()).hexdigest() + ".jpg"
+                new_thumb_path = os.path.join(self.thumbnail_dir, new_thumb_hash).replace('\\', '/')
+                if os.path.exists(old_thumb_path):
+                    os.rename(old_thumb_path, new_thumb_path)
+                
+                # Update video data
+                video["path"] = new_path
+                video["filename"] = new_filename_no_ext
+                video["thumbnail_path"] = new_thumb_path
+
+                self.save_data()
+                self.populate_file_list()
+                self.update_info_panel() # Refresh info panel too
+                QMessageBox.information(self, "성공", "파일 이름이 변경되었습니다.")
+            except Exception as e:
+                QMessageBox.critical(self, "오류", f"이름 변경 실패: {e}")
+
+    def edit_tags_for_video(self, video):
+        current_tags = video.get("tags", "")
+        
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("태그 수정")
+        dialog.setLabelText("태그를 입력하세요 (쉼표로 구분):")
+        dialog.setTextValue(current_tags)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint) # Remove help button
+
+        ok = dialog.exec_()
+        new_tags = dialog.textValue()
+
+        if ok:
+            video["tags"] = new_tags.strip()
+            self.save_data()
+            self.populate_file_list() # Refresh file list to show new tags
+            self.update_info_panel() # Refresh info panel too
+
+    def show_path_for_copy(self, path):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("전체 경로 복사")
+        dialog.setMinimumWidth(600)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        layout = QVBoxLayout()
+        path_edit = QLineEdit(path)
+        path_edit.selectAll()
+        path_edit.setReadOnly(True)
+        ok_button = QPushButton("닫기")
+        ok_button.clicked.connect(dialog.accept)
+        layout.addWidget(path_edit)
+        layout.addWidget(ok_button)
+        dialog.setLayout(layout)
+        dialog.exec_()
 
     def update_info_panel(self):
         self.media_player.stop()
+
+        # Reset controls UI to default state before loading new info
+        controls = self.video_container
+        controls.seek_slider.setRange(0, 0)
+        controls.seek_slider.setValue(0)
+        controls.current_time_label.setText("00:00")
+        controls.total_time_label.setText("00:00")
+
         selected_rows = self.file_list.selectionModel().selectedRows()
         if not selected_rows: self.clear_info_panel(); return
 
@@ -381,12 +708,34 @@ class VideoManagerApp(QMainWindow):
         self.current_selected_path = path
         video = next((v for v in self.video_data if v["path"] == path), None)
 
+        # Clear previous timeline items, keeping the placeholder label
+        for i in reversed(range(self.timeline_list_layout.count())):
+            widget = self.timeline_list_layout.itemAt(i).widget()
+            if widget and widget != self.no_timeline_label:
+                widget.deleteLater()
+        self.no_timeline_label.hide() # Hide by default, show if needed
+
         if video:
             self.selected_filename_label.setText(video.get("filename", "-"))
             self.selected_tags_label.setText(video.get("tags", "-"))
             thumb_path = video.get("thumbnail_path")
             self.video_container.set_thumbnail(QPixmap(thumb_path) if thumb_path and os.path.exists(thumb_path) else QPixmap())
             self.video_container.big_play_btn.show()
+
+            # Populate timeline
+            if "timelines" not in video: video["timelines"] = [] # Ensure key exists
+            timelines = video["timelines"]
+
+            self.timeline_widgets.clear() # Clear old widget references
+            if timelines:
+                self.no_timeline_label.hide()
+                for timeline in timelines:
+                    widget = TimelineEntryWidget(timeline)
+                    widget.clicked.connect(lambda time_sec: self.media_player.setPosition(time_sec * 1000))
+                    self.timeline_list_layout.addWidget(widget)
+                    self.timeline_widgets.append(widget)
+            else:
+                self.no_timeline_label.show()
         else:
             self.clear_info_panel()
 
@@ -397,6 +746,13 @@ class VideoManagerApp(QMainWindow):
         self.video_container.set_thumbnail(QPixmap())
         self.video_container.big_play_btn.hide()
         self.current_selected_path = None
+
+        # Clear timeline widgets, but keep the placeholder label
+        for i in reversed(range(self.timeline_list_layout.count())):
+            widget = self.timeline_list_layout.itemAt(i).widget()
+            if widget and widget != self.no_timeline_label:
+                widget.deleteLater()
+        self.no_timeline_label.show()
 
     def play_video(self):
         if self.current_selected_path:
@@ -427,8 +783,32 @@ class VideoManagerApp(QMainWindow):
                 self.video_container.set_thumbnail(QPixmap(thumb_path) if thumb_path and os.path.exists(thumb_path) else QPixmap())
                 controls.big_play_btn.show()
 
-    def position_changed(self, position): self.video_container.seek_slider.setValue(position)
-    def duration_changed(self, duration): self.video_container.seek_slider.setRange(0, duration)
+    def update_timeline_highlight(self, position_ms):
+        if not self.timeline_widgets:
+            return
+
+        position_sec = position_ms / 1000
+        
+        current_timeline_widget = None
+        
+        # The timeline entries in the widgets are sorted by time already because video["timelines"] is sorted
+        for widget in self.timeline_widgets:
+            if widget.timeline_data['time'] <= position_sec:
+                current_timeline_widget = widget
+            else:
+                break # Since the list is sorted, no need to check further
+        
+        # Highlight the current one and un-highlight others
+        for widget in self.timeline_widgets:
+            widget.set_highlight(widget == current_timeline_widget)
+
+    def position_changed(self, position): 
+        self.video_container.seek_slider.setValue(position)
+        self.video_container.current_time_label.setText(self.ms_to_time_string(position))
+
+    def duration_changed(self, duration): 
+        self.video_container.seek_slider.setRange(0, duration)
+        self.video_container.total_time_label.setText(self.ms_to_time_string(duration))
     def set_position(self, position): self.media_player.setPosition(position)
     
     def closeEvent(self, event):
@@ -510,4 +890,3 @@ if __name__ == '__main__':
     ex = VideoManagerApp()
     ex.show()
     sys.exit(app.exec_())
-xec_())
