@@ -854,13 +854,13 @@ class VideoManagerApp(QMainWindow):
         menu.setStyleSheet("QMenu { background-color: #272727; color: white; border: 1px solid #505050; } QMenu::item:selected { background-color: #3f3f3f; }")
         rename_action = menu.addAction("이름 변경")
         tag_action = menu.addAction("태그 수정")
-        copy_action = menu.addAction("경로 복사")
+        copy_action = menu.addAction("경로 열기")
         
         action = menu.exec_(self.file_list.mapToGlobal(self.file_list.visualItemRect(self.file_list.item(row, 1)).center()))
         
         if action == rename_action: self.rename_video_file(video)
         elif action == tag_action: self.edit_tags_for_video(video)
-        elif action == copy_action: self.show_path_for_copy(path_item.text())
+        elif action == copy_action: self.show_path_for_open(path_item.text())
 
 
     def rename_video_file(self, video):
@@ -884,8 +884,9 @@ class VideoManagerApp(QMainWindow):
             video["tags"] = text.strip(); self.save_data()
             self.populate_file_list(self.current_view_videos); self.update_info_panel()
             
-    def show_path_for_copy(self, path):
-        QMessageBox.information(self, "전체 경로", path)
+    def show_path_for_open(self, path):
+        folder_path = os.path.dirname(path)
+        os.startfile(folder_path)
 
 
     def filter_list(self):
