@@ -35,6 +35,27 @@ except ImportError as e:
 import cv2
 import subprocess
 
+# --- Custom Clickable Widgets ---
+class ClickableSlider(QSlider):
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        if event.button() == Qt.LeftButton:
+            if self.orientation() == Qt.Horizontal:
+                # Set value based on click position
+                val = QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), event.x(), self.width())
+                self.setValue(val)
+
+class ClickableLabel(QLabel):
+    clicked = pyqtSignal()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
 # --- Thumbnail Utility Function ---
 def _create_thumbnail_file(video_path, thumb_path, size=(480, 270)):
     try:
@@ -92,7 +113,7 @@ class VideoContainer(QWidget):
     def __init__(self, media_player, parent=None):
         super().__init__(parent)
         self.media_player = media_player
-        self.setFixedSize(640, 360)
+        self.setFixedSize(960, 540)
         self.setStyleSheet("background-color: black;")
         self.setMouseTracking(True)
 
@@ -132,13 +153,13 @@ class VideoContainer(QWidget):
         self.current_time_label = QLabel("00:00")
         self.current_time_label.setStyleSheet("color: white;")
 
-        self.seek_slider = QSlider(Qt.Horizontal)
+        self.seek_slider = ClickableSlider(Qt.Horizontal)
         self.seek_slider.setRange(0, 0)
 
         self.total_time_label = QLabel("00:00")
         self.total_time_label.setStyleSheet("color: white;")
         
-        self.volume_label = QLabel()
+        self.volume_label = ClickableLabel()
         self.volume_label.setPixmap(self.style().standardIcon(QStyle.SP_MediaVolume).pixmap(16,16))
 
         self.volume_slider = QSlider(Qt.Horizontal)
@@ -387,7 +408,8 @@ class VideoManagerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('똑똑한 영상 관리자 (Smart Video Manager)')
-        self.video_data = []
+        self.video_data = [] # Master list of all videos from JSON
+        self.current_view_videos = [] # List of videos currently shown in the table
         self.json_path = "videos.json"
         self.thumbnail_dir = ".thumbnails"
         os.makedirs(self.thumbnail_dir, exist_ok=True)
@@ -404,6 +426,7 @@ class VideoManagerApp(QMainWindow):
         self.init_ui()
         self.connect_signals()
         self.load_data()
+        self.update_volume_icon() # Set initial icon state
 
     def init_ui(self):
         self.central_widget = QWidget()
@@ -482,7 +505,7 @@ class VideoManagerApp(QMainWindow):
 
         self.status_bar = self.statusBar()
         self.status_bar.showMessage("준비 완료.")
-        self.resize(1200, 800)
+        self.resize(1600, 900)
 
     def connect_signals(self):
         self.select_folder_btn.clicked.connect(self.select_folder)
@@ -495,12 +518,15 @@ class VideoManagerApp(QMainWindow):
         self.media_player.positionChanged.connect(self.position_changed)
         self.media_player.positionChanged.connect(self.update_timeline_highlight)
         self.media_player.durationChanged.connect(self.duration_changed)
+        self.media_player.volumeChanged.connect(self.update_volume_icon)
+        self.media_player.mutedChanged.connect(self.update_volume_icon)
         
         controls = self.video_container
         controls.play_pause_btn.clicked.connect(self.toggle_play_pause)
         controls.big_play_btn.clicked.connect(self.play_video)
-        controls.seek_slider.sliderMoved.connect(self.set_position)
+        controls.seek_slider.valueChanged.connect(self.set_position)
         controls.volume_slider.valueChanged.connect(self.media_player.setVolume)
+        controls.volume_label.clicked.connect(self.toggle_mute)
 
         self.add_timeline_btn.clicked.connect(self.open_add_timeline_dialog)
 
@@ -527,33 +553,27 @@ class VideoManagerApp(QMainWindow):
     def on_scan_finished(self, found_videos):
         self.status_bar.showMessage(f"{len(found_videos)}개의 비디오를 찾았습니다. 데이터베이스 업데이트 중...")
         
-        # Create a dictionary of existing videos by path for quick lookup
         existing_videos_map = {v['path']: v for v in self.video_data}
         new_videos_added_to_db = 0
         
-        # Merge found videos with the master data list (self.video_data)
         for i, found_video in enumerate(found_videos):
             path = found_video['path']
             if path in existing_videos_map:
-                # If video exists, update the instance in found_videos with stored data (tags, timelines)
-                # to ensure the UI displays the saved information.
                 existing_video = existing_videos_map[path]
                 found_videos[i]['tags'] = existing_video.get('tags', '')
                 found_videos[i]['timelines'] = existing_video.get('timelines', [])
             else:
-                # If video is new, add it to the master list
                 self.video_data.append(found_video)
                 new_videos_added_to_db += 1
 
-        # Now, populate the list with ONLY the videos found in the scanned folder
-        self.populate_file_list(found_videos)
+        self.current_view_videos = found_videos
+        self.populate_file_list(self.current_view_videos)
         
-        # Save the potentially updated master data list
         if new_videos_added_to_db > 0:
             self.save_data()
             
-        self.status_bar.showMessage(f"스캔 완료. {len(found_videos)}개의 영상 표시. {new_videos_added_to_db}개 신규 추가.", 5000)
-        self._stop_all_threads(stop_batch=False) # Keep batch thumbnail generator running if it was
+        self.status_bar.showMessage(f"스캔 완료. {len(self.current_view_videos)}개의 영상 표시. {new_videos_added_to_db}개 신규 추가.", 5000)
+        self._stop_all_threads(stop_batch=False)
 
     def open_add_timeline_dialog(self):
         if not self.current_selected_path:
@@ -562,7 +582,7 @@ class VideoManagerApp(QMainWindow):
 
         video = next((v for v in self.video_data if v["path"] == self.current_selected_path), None)
         if not video:
-            return # Should not happen if a path is selected
+            return
 
         duration_str = video.get("duration", "0:00:00")
         try:
@@ -582,14 +602,11 @@ class VideoManagerApp(QMainWindow):
                 QMessageBox.warning(self, "경고", "설명을 입력해야 합니다.")
                 return
 
-            # Create a unique path for the timeline thumbnail
             thumb_hash = hashlib.md5(f"{video['path']}_{data['time']}".encode()).hexdigest()
             timeline_thumb_path = os.path.join(self.thumbnail_dir, f"timeline_{thumb_hash}.jpg").replace('\\', '/')
 
-            # Generate the thumbnail
             _create_thumbnail_for_timestamp(video['path'], timeline_thumb_path, data['time'])
 
-            # Add to video_data
             if "timelines" not in video:
                 video["timelines"] = []
             
@@ -598,16 +615,16 @@ class VideoManagerApp(QMainWindow):
                 "text": data["description"].strip(),
                 "thumb_path": timeline_thumb_path
             })
-            # Sort timelines by time
             video["timelines"].sort(key=lambda t: t["time"])
 
-            # Save data
             self.save_data()
-            
-            # Refresh UI
             self.update_info_panel()
 
-            # TODO: Generate thumbnail for the new timeline entry
+    def _get_current_view_from_table(self):
+        paths = [self.file_list.item(row, 4).text() for row in range(self.file_list.rowCount())]
+        # Return the full video objects from the master list, preserving order
+        path_to_video_map = {v['path']: v for v in self.video_data}
+        return [path_to_video_map[p] for p in paths if p in path_to_video_map]
 
     def rename_video_file(self, video):
         current_filename_no_ext = video["filename"]
@@ -616,12 +633,15 @@ class VideoManagerApp(QMainWindow):
         dialog.setWindowTitle("이름 수정")
         dialog.setLabelText("새 파일명을 입력하세요 (확장자 제외):")
         dialog.setTextValue(current_filename_no_ext)
-        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint) # Remove help button
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         
         ok = dialog.exec_()
         new_filename_no_ext = dialog.textValue()
         
         if ok and new_filename_no_ext and new_filename_no_ext != current_filename_no_ext:
+            # Preserve current view before making changes
+            self.current_view_videos = self._get_current_view_from_table()
+
             old_path = video["path"]
             file_dir = os.path.dirname(old_path)
             ext = video["extension"]
@@ -635,21 +655,20 @@ class VideoManagerApp(QMainWindow):
             try:
                 os.rename(old_path, new_path)
                 
-                # Update thumbnail path and rename thumbnail file if it exists
                 old_thumb_path = video["thumbnail_path"]
                 new_thumb_hash = hashlib.md5(new_path.encode()).hexdigest() + ".jpg"
                 new_thumb_path = os.path.join(self.thumbnail_dir, new_thumb_hash).replace('\\', '/')
                 if os.path.exists(old_thumb_path):
                     os.rename(old_thumb_path, new_thumb_path)
                 
-                # Update video data
                 video["path"] = new_path
                 video["filename"] = new_filename_no_ext
                 video["thumbnail_path"] = new_thumb_path
 
                 self.save_data()
-                self.populate_file_list()
-                self.update_info_panel() # Refresh info panel too
+                # Refresh the list with the preserved view
+                self.populate_file_list(self.current_view_videos)
+                self.update_info_panel()
                 QMessageBox.information(self, "성공", "파일 이름이 변경되었습니다.")
             except Exception as e:
                 QMessageBox.critical(self, "오류", f"이름 변경 실패: {e}")
@@ -661,16 +680,21 @@ class VideoManagerApp(QMainWindow):
         dialog.setWindowTitle("태그 수정")
         dialog.setLabelText("태그를 입력하세요 (쉼표로 구분):")
         dialog.setTextValue(current_tags)
-        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint) # Remove help button
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         ok = dialog.exec_()
         new_tags = dialog.textValue()
 
         if ok:
+            # Preserve the current view before making changes
+            self.current_view_videos = self._get_current_view_from_table()
+            
             video["tags"] = new_tags.strip()
             self.save_data()
-            self.populate_file_list() # Refresh file list to show new tags
-            self.update_info_panel() # Refresh info panel too
+
+            # Refresh the list with the same set of videos, now with updated tags
+            self.populate_file_list(self.current_view_videos)
+            self.update_info_panel()
 
     def show_path_for_copy(self, path):
         dialog = QDialog(self)
@@ -691,10 +715,11 @@ class VideoManagerApp(QMainWindow):
     def update_info_panel(self):
         self.media_player.stop()
 
-        # Reset controls UI to default state before loading new info
         controls = self.video_container
+        controls.seek_slider.blockSignals(True)
         controls.seek_slider.setRange(0, 0)
         controls.seek_slider.setValue(0)
+        controls.seek_slider.blockSignals(False)
         controls.current_time_label.setText("00:00")
         controls.total_time_label.setText("00:00")
 
@@ -708,12 +733,11 @@ class VideoManagerApp(QMainWindow):
         self.current_selected_path = path
         video = next((v for v in self.video_data if v["path"] == path), None)
 
-        # Clear previous timeline items, keeping the placeholder label
         for i in reversed(range(self.timeline_list_layout.count())):
             widget = self.timeline_list_layout.itemAt(i).widget()
             if widget and widget != self.no_timeline_label:
                 widget.deleteLater()
-        self.no_timeline_label.hide() # Hide by default, show if needed
+        self.no_timeline_label.hide()
 
         if video:
             self.selected_filename_label.setText(video.get("filename", "-"))
@@ -722,11 +746,10 @@ class VideoManagerApp(QMainWindow):
             self.video_container.set_thumbnail(QPixmap(thumb_path) if thumb_path and os.path.exists(thumb_path) else QPixmap())
             self.video_container.big_play_btn.show()
 
-            # Populate timeline
-            if "timelines" not in video: video["timelines"] = [] # Ensure key exists
+            if "timelines" not in video: video["timelines"] = []
             timelines = video["timelines"]
 
-            self.timeline_widgets.clear() # Clear old widget references
+            self.timeline_widgets.clear()
             if timelines:
                 self.no_timeline_label.hide()
                 for timeline in timelines:
@@ -747,7 +770,6 @@ class VideoManagerApp(QMainWindow):
         self.video_container.big_play_btn.hide()
         self.current_selected_path = None
 
-        # Clear timeline widgets, but keep the placeholder label
         for i in reversed(range(self.timeline_list_layout.count())):
             widget = self.timeline_list_layout.itemAt(i).widget()
             if widget and widget != self.no_timeline_label:
@@ -771,6 +793,16 @@ class VideoManagerApp(QMainWindow):
         else:
             self.media_player.play()
 
+    def toggle_mute(self):
+        self.media_player.setMuted(not self.media_player.isMuted())
+
+    def update_volume_icon(self):
+        if self.media_player.isMuted() or self.media_player.volume() == 0:
+            icon = QStyle.SP_MediaVolumeMuted
+        else:
+            icon = QStyle.SP_MediaVolume
+        self.video_container.volume_label.setPixmap(self.style().standardIcon(icon).pixmap(16, 16))
+
     def media_state_changed(self, state):
         controls = self.video_container
         if state == QMediaPlayer.PlayingState:
@@ -788,28 +820,31 @@ class VideoManagerApp(QMainWindow):
             return
 
         position_sec = position_ms / 1000
-        
         current_timeline_widget = None
         
-        # The timeline entries in the widgets are sorted by time already because video["timelines"] is sorted
         for widget in self.timeline_widgets:
             if widget.timeline_data['time'] <= position_sec:
                 current_timeline_widget = widget
             else:
-                break # Since the list is sorted, no need to check further
+                break
         
-        # Highlight the current one and un-highlight others
         for widget in self.timeline_widgets:
             widget.set_highlight(widget == current_timeline_widget)
 
-    def position_changed(self, position): 
-        self.video_container.seek_slider.setValue(position)
+    def position_changed(self, position):
+        slider = self.video_container.seek_slider
+        slider.blockSignals(True)
+        slider.setValue(position)
+        slider.blockSignals(False)
         self.video_container.current_time_label.setText(self.ms_to_time_string(position))
 
     def duration_changed(self, duration): 
         self.video_container.seek_slider.setRange(0, duration)
         self.video_container.total_time_label.setText(self.ms_to_time_string(duration))
-    def set_position(self, position): self.media_player.setPosition(position)
+
+    def set_position(self, position):
+        if self.media_player.position() != position:
+            self.media_player.setPosition(position)
     
     def closeEvent(self, event):
         self.media_player.stop()
@@ -828,10 +863,17 @@ class VideoManagerApp(QMainWindow):
     def filter_list(self):
         search_term = self.search_input.text().lower()
         filter_by = self.filter_combo.currentText()
-        if not search_term: self.populate_file_list(); return
+        
+        # Start with the currently viewed videos if a scan has been performed,
+        # otherwise use the full database.
+        source_data = self.current_view_videos if self.current_view_videos else self.video_data
+        
+        if not search_term:
+            self.populate_file_list(source_data)
+            return
         
         filtered_videos = [
-            v for v in self.video_data 
+            v for v in source_data
             if (filter_by == "All" and (search_term in v.get("filename", "").lower() or search_term in v.get("tags", "").lower())) or
                (filter_by == "Filename" and search_term in v.get("filename", "").lower()) or
                (filter_by == "Tag" and search_term in v.get("tags", "").lower())
@@ -862,7 +904,9 @@ class VideoManagerApp(QMainWindow):
         try:
             with open(self.json_path, 'r', encoding='utf-8') as f:
                 self.video_data = json.load(f)
-            self.populate_file_list()
+            # On initial load, the view contains all videos from the database
+            self.current_view_videos = self.video_data
+            self.populate_file_list(self.current_view_videos)
         except (json.JSONDecodeError, TypeError):
             self.status_bar.showMessage(f"오류: {self.json_path} 파일을 읽을 수 없습니다.")
             self.video_data = []
